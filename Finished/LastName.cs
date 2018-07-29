@@ -1,40 +1,45 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 
 using Oxide.Core;
-using Oxide.Core.Configuration;
 
-/* --- Do not edit anything here if you don't know what are you doing --- */
+/* --------------------------------------------------------------------- */
+/* --- Don't edit anything here if you don't know what you are doing --- */
+/* --------------------------------------------------------------------- */
 
 namespace Oxide.Plugins
 {
-	[Info("LastName", "deer_SWAG", "0.1.16", ResourceId = 1227)]
-	[Description("Stores all usernames")]
+	[Info("LastName", "deer_SWAG", "0.3.0", ResourceId = 1227)]
+	[Description("Stores all player usernames")]
 	class LastName : RustPlugin
 	{
-		class StoredData
+		#region Definitions
+
+		const string PluginPermission = "lastname.use";
+
+		class PluginData
 		{
-			public HashSet<Player> Players = new HashSet<Player>();
+			public HashSet<PlayerData> Players = new HashSet<PlayerData>();
 
-			public StoredData() { }
-
-			public void Add(Player player) => Players.Add(player);
+			public void Add(PlayerData player) => Players.Add(player);
 		}
 
-		class Player
+		class PlayerData
 		{
 			public ulong userID;
 			public HashSet<string> Names = new HashSet<string>();
 
-			public Player() { }
-			public Player(ulong userID) { this.userID = userID; }
+			public PlayerData() { }
+			public PlayerData(ulong userID) { this.userID = userID; }
 
 			public void Add(string name) => Names.Add(name);
 		}
 
-		StoredData 		  data;
-		DynamicConfigFile nameChangeData;
+		#endregion Definitions
+
+		PluginData data;
 
 		protected override void LoadDefaultConfig()
 		{
@@ -42,128 +47,90 @@ namespace Oxide.Plugins
 			Puts("Default config was saved and loaded");
 		}
 
-		void LoadDefaultMessages()
+		protected override void LoadDefaultMessages()
 		{
 			lang.RegisterMessages(new Dictionary<string, string>()
 			{
-				{ "NoAccess", "You don't have access to this command" },
 				{ "WrongQueryChat", "/names <name/steamID>" },
 				{ "WrongQueryConsole", "player.names <name/steamID>" },
 				{ "NoPlayerFound", "No players found with that name/steamID" },
-				{ "PlayerWasFound", "{name}({id}) was also known as: " }
+				{ "PlayerWasFound", "{name}({id}) was also known as: " },
+				{ "DataLoadFail", "Unable to load data file. Creating a new one" }
 			}, this);
 		}
 
-		void Loaded()
+		void Init()
 		{
-			LoadDefaultMessages();
 			CheckConfig();
 
-			data = Interface.GetMod().DataFileSystem.ReadObject<StoredData>(Title);
+			data = Interface.Oxide.DataFileSystem.ReadObject<PluginData>(Name);
+			permission.RegisterPermission("lastname.use", this);
 
 			if (data == null)
 			{
-				RaiseError("Unable to load data file");
-				rust.RunServerCommand("oxide.unload LastName");
+				PrintWarning(Lang("DataLoadFail"));
+				SaveData();
 			}
+		}
 
-			if (IsPluginExists("NameChange"))
-				nameChangeData = Interface.GetMod().DataFileSystem.GetDatafile("NameChange");
+		void OnServerSave()
+		{
+			SaveData();
 		}
 
 		void OnPlayerConnected(Network.Message packet)
 		{
-			if ((bool)Config["ReplaceWithFirstName"] && data.Players.Count > 0)
+			if (Config.Get<bool>("ReplaceWithFirstName"))
 			{
-				if (nameChangeData != null)
+				foreach (PlayerData dataPlayer in data.Players)
 				{
-					foreach (KeyValuePair<string, object> item in nameChangeData)
+					if (packet.connection.userid == dataPlayer.userID)
 					{
-						if (Convert.ToUInt64(item.Key) != packet.connection.userid)
-						{
-							foreach (Player dataPlayer in data.Players)
-							{
-								if (packet.connection.userid == dataPlayer.userID)
-								{
-									packet.connection.username = dataPlayer.Names.First();
-									goto end;
-								}
-							}
-						}
-					}
-					end:;
-				}
-				else
-				{
-					foreach (Player dataPlayer in data.Players)
-					{
-						if (packet.connection.userid == dataPlayer.userID)
-						{
-							packet.connection.username = dataPlayer.Names.First();
-							break;
-						}
+						packet.connection.username = dataPlayer.Names.First();
+						break;
 					}
 				}
 			}
 		}
 
+		PlayerData FindPlayerData(ulong userId)
+		{
+			foreach (var player in data.Players)
+			{
+				if (player.userID == userId)
+					return player;
+			}
+
+			return null;
+		}
+
 		void OnPlayerInit(BasePlayer player)
 		{
-			if (data.Players.Count > 0)
+			var playerData = FindPlayerData(player.userID);
+
+			if (playerData != null)
 			{
-				bool found = false;
-				bool newName = false;
-
-				foreach (Player dataPlayer in data.Players)
-				{
-					if (dataPlayer.userID == player.userID)
-					{
-						found = true;
-
-						foreach (string name in dataPlayer.Names)
-						{
-							if (name == player.displayName)
-								break;
-							else
-								newName = true;
-						}
-
-						if (newName)
-							dataPlayer.Add(player.displayName);
-
-						break;
-					}
-				}
-
-				if (!found)
-				{
-					Player p = new Player(player.userID);
-					p.Add(player.displayName);
-
-					data.Add(p);
-				}
+				if (!playerData.Names.Contains(player.displayName))
+					playerData.Add(player.displayName);
 			}
 			else
 			{
-				Player p = new Player(player.userID);
+				PlayerData p = new PlayerData(player.userID);
 				p.Add(player.displayName);
-
 				data.Add(p);
 			}
-
-			SaveData();
 		}
 
 		[ChatCommand("lastname")]
 		void cmdChat(BasePlayer player, string command, string[] args)
 		{
-			if (player.net.connection.authLevel >= (int)Config["CommandAuthLevel"])
-				if (args.Length > 0)
-					PrintToChat(player, GetNames(args));
-				else
-					PrintToChat(player, lang.GetMessage("WrongQueryChat", this));
+			if (!PlayerHasPermission(player, PluginPermission))
+				return;
+
+			if (args.Length > 0)
+				PrintToChat(player, GetNames(args));
 			else
-				PrintToChat(player, lang.GetMessage("NoAccess", this));
+				PrintToChat(player, Lang("WrongQueryChat", player));
 		}
 
 		[ConsoleCommand("player.names")]
@@ -172,29 +139,27 @@ namespace Oxide.Plugins
 			if (arg.HasArgs())
 				Puts(GetNames(arg.Args));
 			else
-				Puts(lang.GetMessage("WrongQueryConsole", this));
+				Puts(Lang("WrongQueryConsole"));
 		}
 
 		string GetNames(string[] args)
 		{
-			string message = lang.GetMessage("PlayerWasFound", this);
+			var message = new StringBuilder();
 			string name = string.Empty;
+
+			message.Append(Lang("PlayerWasFound"));
 
 			try
 			{
 				ulong id = Convert.ToUInt64(args[0]);
+				var playerData = FindPlayerData(id);
 
-				foreach (Player dataPlayer in data.Players)
+				if (playerData != null)
 				{
-					if (dataPlayer.userID == id)
-					{
-						name = dataPlayer.Names.First();
+					name = playerData.Names.First();
 
-						foreach (string n in dataPlayer.Names)
-							message += n + ", ";
-
-						break;
-					}
+					foreach (string n in playerData.Names)
+						message.Append(n + ", ");
 				}
 			}
 			catch { }
@@ -202,18 +167,18 @@ namespace Oxide.Plugins
 			{
 				if (name.Length > 0)
 				{
-					message = message.Substring(0, message.Length - 2).Replace("{name}", name).Replace("{id}", args[0]);
+					message.Remove(message.Length - 2, 2).Replace("{name}", name).Replace("{id}", args[0]);
 				}
 				else
 				{
-					Player found = null;
+					PlayerData found = null;
 
 					for (int i = 0; i < args.Length; i++)
 						name += args[i] + " ";
 
 					name = name.TrimEnd();
 
-					foreach (Player dataPlayer in data.Players)
+					foreach (PlayerData dataPlayer in data.Players)
 					{
 						foreach (string s in dataPlayer.Names)
 						{
@@ -238,60 +203,62 @@ namespace Oxide.Plugins
 					if (found != null)
 					{
 						foreach (string s in found.Names)
-							message += s + ", ";
+							message.Append(s + ", ");
 
-						message = message.Substring(0, message.Length - 2).Replace("{name}", name).Replace("{id}", found.userID.ToString());
+						message.Remove(message.Length - 2, 2).Replace("{name}", name).Replace("{id}", found.userID.ToString());
 					}
 					else
 					{
-						message = lang.GetMessage("NoPlayerFound", this);
+						message.Clear();
+						message.Append(Lang("NoPlayerFound"));
 					}
 				}
 			}
 
-			return message;
+			return message.ToString();
 		}
 
 		void SendHelpText(BasePlayer player)
 		{
-			if (player.net.connection.authLevel >= (int)Config["CommandAuthLevel"])
-				PrintToChat(player, lang.GetMessage("WrongQuery", this));
+			if (PlayerHasPermission(player, PluginPermission))
+				PrintToChat(player, Lang("WrongQuery"));
 		}
 
 		void CheckConfig()
 		{
 			ConfigItem("ReplaceWithFirstName", false);
-			ConfigItem("CommandAuthLevel", 0);
 
 			SaveConfig();
 		}
 
 		void SaveData()
 		{
-			Interface.GetMod().DataFileSystem.WriteObject(Title, data);
+			Interface.Oxide.DataFileSystem.WriteObject(Name, data);
 		}
 
-		// ----------------------------- UTILS -----------------------------
-		// -----------------------------------------------------------------
+		#region Helpers
 
 		void ConfigItem(string name, object defaultValue)
 		{
 			Config[name] = Config[name] ?? defaultValue;
 		}
 
-		void ConfigItem(string name, string name2, object defaultValue)
-		{
-			Config[name, name2] = Config[name, name2] ?? defaultValue;
-		}
-
-		private bool IsPluginExists(string name)
-		{
-			return Interface.GetMod().GetLibrary<Core.Libraries.Plugins>().Exists(name);
-		}
-
 		bool StringContains(string source, string value, StringComparison comparison)
 		{
 			return source.IndexOf(value, comparison) >= 0;
 		}
+
+		string Lang(string key, BasePlayer player = null)
+		{
+			return lang.GetMessage(key, this, player?.UserIDString);
+		}
+
+		bool PlayerHasPermission(BasePlayer player, string permissionName)
+		{
+			return player.IsAdmin || permission.UserHasPermission(player.UserIDString, permissionName);
+		}
+
+		#endregion Helpers
+
 	}
 }

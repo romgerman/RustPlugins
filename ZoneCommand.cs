@@ -4,26 +4,45 @@ using System.Text.RegularExpressions;
 
 using Oxide.Core;
 
-using UnityEngine;
-
-/* --- Do not edit anything here if you don't know what are you doing --- */
+/* --------------------------------------------------------------------- */
+/* --- Don't edit anything here if you don't know what you are doing --- */
+/* --------------------------------------------------------------------- */
 
 namespace Oxide.Plugins
 {
-	[Info("ZoneCommand", "deer_SWAG", "0.1.0", ResourceId = 1254)]
+	[Info("ZoneCommand", "deer_SWAG", "0.1.1", ResourceId = 1254)]
 	[Description("Executes the commands when a player is entering a zone")]
 	class ZoneCommand : RustPlugin
 	{
-		enum Methods { Once, Always, PerPlayer, PerDay, PerGameDay, PerGame }
-		enum Modes	 { OnEnter, OnExit }
+		#region Definitions
 
-		const string PermissionName = "zonecommand.use";
+		enum Methods
+		{
+			/// <summary>Only once</summary>
+			Once,
+			/// <summary>Every time a player enters/exits a zone</summary>
+			Always,
+			/// <summary>Per every player</summary>
+			PerPlayer,
+			/// <summary>Every day</summary>
+			PerDay,
+			/// <summary>Every in-game day</summary>
+			PerGameDay
+		}
 
-		class StoredData
+		enum Modes
+		{
+			/// <summary>When a player enters a zone</summary>
+			OnEnter,
+			/// <summary>When a player exits a zone</summary>
+			OnExit
+		}
+
+		const string PluginPermission = "zonecommand.use";
+
+		class PluginData
 		{
 			public HashSet<Zone> Zones = new HashSet<Zone>();
-
-			public StoredData() { }
 
 			public void Add(Zone zone) => Zones.Add(zone);
 			public void Remove(Zone zone) => Zones.Remove(zone);
@@ -50,52 +69,51 @@ namespace Oxide.Plugins
 		{
 			public ulong UserId;
 			public int Count;
-
-			public ZonePlayer() { }
 		}
 
-		StoredData data;
+		#endregion Definitions
 
-		void LoadDefaultMessages()
+		PluginData data;
+
+		protected override void LoadDefaultMessages()
 		{
 			lang.RegisterMessages(new Dictionary<string, string>()
 			{
 				{ "HelpText", "ZoneCommand:\n" +
-								"/zcmd add <zoneID> {command} {command} ...\n" +
-								"/zcmd remove <zoneID>\n" +
-								"/zcmd list" },
+								"/zcmd add [zoneID] {command} {command} ... - add a zone with commands\n" +
+								"/zcmd remove <zoneID> - remove a zone with commands\n" +
+								"/zcmd list - show all zones with commands" +
+								"/zcmd clear - remove all zones with commands" +
+								"/zcmd vars - show available variables" },
 				{ "AvailableVars",  "Available variables: $player.id, $player.name, $player.xyz, $player.x, $player.y, $player.z" },
-				{ "UsableCommands", "Available commands: add, remove, list, clear, vars" },
-				{ "ErrorEnterID",       "You must enter ID of zone" },
 				{ "ErrorEnterCommands", "You must enter at least one command" },
 				{ "ErrorNotFound",      "Zone was not found" },
 				{ "Added",   "Zone with commands was successfully added!" },
 				{ "Removed", "Commands for zone has been removed!" },
 				{ "Clear",   "All commands for zones were deleted" },
 				{ "List",    "Zones with commands:\n" },
-				{ "Unpermitted", "You do not have a permission to use this command" }
+				{ "DataLoadFail", "Unable to load data file. Creating a new one" },
+				{ "NoZoneManager", "You need to install ZoneManager or RectZones to use this plugin" }
 			}, this);
 		}
 
 		void OnServerInitialized()
 		{
-			data = Interface.GetMod().DataFileSystem.ReadObject<StoredData>(Title);
+			data = Interface.Oxide.DataFileSystem.ReadObject<PluginData>(Name);
 
 			if(data == null)
 			{
-				RaiseError("Unable to load data file");
-				rust.RunServerCommand("oxide.unload " + Title);
+				PrintWarning(Lang("DataLoadFail"));
+				SaveData();
 			}
 
-			if(!IsPluginExists("ZoneManager") || !IsPluginExists("RectZones"))
-				RaiseError("You need to install ZoneManager or RectZones to use this plugin");
+			if(!IsPluginExists("ZoneManager") && !IsPluginExists("RectZones"))
+				RaiseError(Lang("NoZoneManager"));
 		}
 
-		void Loaded()
+		void Init()
 		{
-			LoadDefaultMessages();
-
-			permission.RegisterPermission(PermissionName, this);
+			permission.RegisterPermission(PluginPermission, this);
 		}
 
 		void Unload()
@@ -103,30 +121,41 @@ namespace Oxide.Plugins
 			SaveData();
 		}
 
+		#region ZoneManager hooks
+
 		void OnEnterZone(string zoneID, BasePlayer player)
 		{
-			if (data.Zones.Count > 0)
+			if (data.Zones.Count == 0)
+				return;
+			
+			foreach (Zone zone in data.Zones)
 			{
-				foreach (Zone zone in data.Zones)
+				if (zone.Id == zoneID && zone.Mode == Modes.OnEnter)
 				{
-					if (zone.Id == zoneID && zone.Mode == Modes.OnEnter)
-						ExecuteZone(zone, player);
+					ExecuteZone(zone, player);
+					return;
 				}
 			}
 		}
 
 		void OnExitZone(string zoneID, BasePlayer player)
 		{
-			if (data.Zones.Count > 0)
+			if (data.Zones.Count == 0)
+				return;
+			
+			foreach (Zone zone in data.Zones)
 			{
-				foreach (Zone zone in data.Zones)
+				if (zone.Id == zoneID && zone.Mode == Modes.OnExit)
 				{
-					if (zone.Id == zoneID && zone.Mode == Modes.OnExit)
-						ExecuteZone(zone, player);
+					ExecuteZone(zone, player);
+					return;
 				}
 			}
 		}
 
+		#endregion ZoneManager hooks
+
+		// TODO
 		void ExecuteZone(Zone zone, BasePlayer player)
 		{
 			bool addPlayer = false;
@@ -225,11 +254,12 @@ namespace Oxide.Plugins
 		}
 	
 		// /zcmd add 81195143 {say hello there} {say okay then}
+		// id is optional (if there is no id then generate it)
 
 		[ChatCommand("zcmd")]
 		void cmdChat(BasePlayer player, string command, string[] args)
 		{
-			if (!IsPlayerPermitted(player, PermissionName))
+			if (!PlayerHasPermission(player, PluginPermission))
 				return;
 
 			if (args.Length > 0)
@@ -252,7 +282,7 @@ namespace Oxide.Plugins
 						{
 							if (string.IsNullOrEmpty(id))
 							{
-								PrintToChat(player, Lang("ErrorEnterID", player));
+								//PrintToChat(player, Lang("ErrorEnterID", player));
 								return;
 							}
 
@@ -263,7 +293,7 @@ namespace Oxide.Plugins
 						{
 							if (string.IsNullOrEmpty(id))
 							{
-								PrintToChat(player, Lang("ErrorEnterID", player));
+								//PrintToChat(player, Lang("ErrorEnterID", player));
 								return;
 							}
 
@@ -316,7 +346,6 @@ namespace Oxide.Plugins
 			{
 				case QueryLanguage.LexemType.Player: method = Methods.PerPlayer; break;
 				case QueryLanguage.LexemType.Day: method = Methods.PerDay; break;
-				case QueryLanguage.LexemType.Game: method = Methods.PerGame; break;
 			}
 
 			if(executionAndCount.Execution2 == QueryLanguage.LexemType.Game && executionAndCount.Execution3 == QueryLanguage.LexemType.Day)
@@ -480,7 +509,7 @@ namespace Oxide.Plugins
 
 		void SendHelpText(BasePlayer player)
 		{
-			if(IsPlayerPermitted(player, PermissionName))
+			if(PlayerHasPermission(player, PluginPermission))
 				PrintToChat(player, Lang("HelpText"));
 		}
 
@@ -489,7 +518,7 @@ namespace Oxide.Plugins
 
 		bool IsPluginExists(string name)
 		{
-			return Interface.GetMod().GetLibrary<Core.Libraries.Plugins>().Exists(name);
+			return Interface.Oxide.GetLibrary<Core.Libraries.Plugins>().Exists(name);
 		}
 
 		string Lang(string key, BasePlayer player = null)
@@ -499,7 +528,7 @@ namespace Oxide.Plugins
 
 		void SaveData()
 		{
-			Interface.GetMod().DataFileSystem.WriteObject(Title, data);
+			Interface.Oxide.DataFileSystem.WriteObject(Name, data);
 		}
 
 		bool IsDigitsOnly(string str)
@@ -510,7 +539,6 @@ namespace Oxide.Plugins
 			return true;
 		}
 
-		// TODO: make query parser work with an array
 		string ArrayToString(string[] array)
 		{
 			string result = string.Empty;
@@ -523,9 +551,9 @@ namespace Oxide.Plugins
 			return result;
 		}
 
-		bool IsPlayerPermitted(BasePlayer player, string permissionName)
+		bool PlayerHasPermission(BasePlayer player, string permissionName)
 		{
-			return player.IsAdmin() || permission.UserHasPermission(player.UserIDString, permissionName);
+			return player.IsAdmin || permission.UserHasPermission(player.UserIDString, permissionName);
 		}
 
 		// ---------------------------- PARSER -----------------------------

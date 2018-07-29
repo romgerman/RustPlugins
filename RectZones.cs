@@ -829,7 +829,7 @@ namespace Oxide.Plugins
 			return true;
 		}
 
-		bool IsPlayerPermitted(BasePlayer player, string permissionName) => (player.IsAdmin() || permission.UserHasPermission(player.UserIDString, permissionName));
+		bool IsPlayerPermitted(BasePlayer player, string permissionName) => (player.IsAdmin || permission.UserHasPermission(player.UserIDString, permissionName));
 
 		#endregion Utils
 
@@ -1067,7 +1067,7 @@ namespace Oxide.Plugins
 				}
 				else
 				{
-					if (Definition.Options.ContainsKey("nobuildex"))
+					/*if (Definition.Options.ContainsKey("nobuildex"))
 					{
 						MeshColliderBatch batch = collider.GetComponent<MeshColliderBatch>();
 
@@ -1088,7 +1088,7 @@ namespace Oxide.Plugins
 								}
 							}
 						}
-					}
+					}*/
 				}
 			}
 
@@ -1110,6 +1110,5 @@ namespace Oxide.Plugins
 				}
 			}
 		}
-
 	}
 }
