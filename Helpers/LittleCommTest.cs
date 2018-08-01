@@ -28,8 +28,7 @@ namespace Oxide.Plugins
 				{
 					if (command == null)
 						action.Invoke();
-					else
-						return;
+					return;
 				}
 
 				_index = 0;
@@ -40,8 +39,8 @@ namespace Oxide.Plugins
 			}
 
 			public string Current() => _args[_index];
-			public string Next()    => _args[++_index];
-			public string Prev()    => _args[--_index];
+			public string Next() => _args[++_index];
+			public string Prev() => _args[--_index];
 
 			public bool NextExists(int num = 1) => _args.Length >= (_index + num + 1);
 		}

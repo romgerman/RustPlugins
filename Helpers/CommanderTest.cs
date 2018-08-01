@@ -1,10 +1,20 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 
-using Oxide.Core;
-using Oxide.Core.Configuration;
+/*
+	TODO:
+			- Add permission checking
+			- (?) Make code smaller
+			- Make required/not required parameters
+			- Text dialogs?
+			- Command aliases?
+*/
+
+/*
+		cmdr.AddAlias("ol", "options list");
+		cmdr.AddAlias("fad", "add 10 fixed lul");
+*/
 
 namespace Oxide.Plugins
 {
@@ -53,12 +63,6 @@ namespace Oxide.Plugins
 			cmdr.Run(null, args.Args);
 		}
 
-		/* TODO
-				- Add permission checking
-				- (?) Make code smaller
-				- Make required/not required parameters
-		*/
-
 		/// <summary>
 		/// Helper class for chat and console commands
 		/// </summary>
@@ -76,31 +80,42 @@ namespace Oxide.Plugins
 				Player
 			}
 
-			public class Param
+			public struct Param
 			{
 				public string Name    { get; internal set; }
 				public ParamType Type { get; internal set; }
 				public bool Greedy    { get; internal set; }
 			}
 
-			public class ValueCollection : Dictionary<string, object>
+			public class ParamValue
 			{
-				public new object this[string key]
+				/// <summary>Raw value</summary>
+				public object Value { get; internal set; }
+				/// <summary>If argument wasn't parse properly</summary>
+				public bool IsInvalid { get; internal set; }
+
+				public string String => Get<string>();
+				public int Integer => Get<int>();
+				public float Single => Get<float>();
+				public BasePlayer Player => Get<BasePlayer>();
+
+				/// <exception cref="InvalidCastException"></exception>
+				public T Get<T>()
+				{
+					return (T)Value;
+				}
+			}
+
+			public class ValueCollection : Dictionary<string, ParamValue>
+			{
+				public new ParamValue this[string key]
 				{
 					get
 					{
-						object value;
+						ParamValue value;
 						this.TryGetValue(key, out value);
 						return value;
 					}
-				}
-				
-				/// <exception cref="InvalidCastException"></exception>
-				public T Get<T>(string key)
-				{
-					object value;
-					this.TryGetValue(key, out value);
-					return (T)value;
 				}
 			}
 
@@ -156,46 +171,66 @@ namespace Oxide.Plugins
 
 						if (param.Greedy)
 						{
-							collection.Add(param.Name, string.Join(" ", args, i, args.Length - i));
+							collection.Add(param.Name, new ParamValue { Value = string.Join(" ", args, i, args.Length - i) });
 							break;
 						}
 
-						collection.Add(param.Name, CheckAndConvert(arg, param.Type));
+						object value;
+						bool result = CheckAndConvert(arg, param.Type, out value);
+
+						collection.Add(param.Name, new ParamValue { Value = value, IsInvalid = !result });
 					}
 				}
 
-				private object CheckAndConvert(string arg, ParamType type)
+				private bool CheckAndConvert(string arg, ParamType type, out object result)
 				{
 					switch (type)
 					{
 						case ParamType.String:
-							return arg;
+							result = arg;
+							return true;
 						case ParamType.Int:
 							{
 								int ret;
 								if (int.TryParse(arg, out ret))
-									return ret;
+								{
+									result = ret;
+									return true;
+								}
+								result = ret;
+								return false;
 							}
-							break;
 						case ParamType.Float:
 							{
 								float ret;
 								if (float.TryParse(arg, out ret))
-									return ret;
+								{
+									result = ret;
+									return true;
+								}
+								result = ret;
+								return false;
 							}
-							break;
 						case ParamType.Bool:
 							{
 								bool ret;
 								if (ParseBool(arg, out ret))
-									return ret;
+								{
+									result = ret;
+									return true;
+								}
+								result = ret;
+								return false;
 							}
-							break;
 						case ParamType.Player:
-							return BasePlayer.Find(arg);
+							{
+								result = BasePlayer.Find(arg);
+								return true;
+							}
 					}
 
-					return null;
+					result = null;
+					return false;
 				}
 			}
 			

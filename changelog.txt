@@ -1,0 +1,11 @@
+﻿
+
+---------------------------- LastName:
+	- Now code follows guidelines
+	- Fixed stupid typo
+
+---------------------------- RectZones:
+	- Refactored the code a little bit
+	- "done" renamed to "finish"
+	- Temporarily removed "nobuildex"
+	- There is a restriction only admins can use ddraw so only admins can see it

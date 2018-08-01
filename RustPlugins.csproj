@@ -393,6 +393,7 @@
     <Compile Include="ChatMention.cs" />
     <Compile Include="Finished\LastName.cs" />
     <Compile Include="Helpers\Helpers.cs" />
+    <Compile Include="Helpers\LittleCommTest.cs" />
     <Compile Include="Helpers\ZcmdLangTest.cs" />
     <Compile Include="IngameClockGUI.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -411,6 +412,9 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="changelog.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
+using System.Linq;
+using System.Text;
 
 using Oxide.Core;
 using Oxide.Core.Plugins;
@@ -9,9 +10,21 @@ using UnityEngine;
 
 using Newtonsoft.Json;
 
+/*
+	TODO:
+			- Make showing a zone better
+			- Fix "nobuildex"
+			- add deployables protection
+			- what to do with ddraw?
+*/
+
+/* --------------------------------------------------------------------- */
+/* --- Don't edit anything here if you don't know what you are doing --- */
+/* --------------------------------------------------------------------- */
+
 namespace Oxide.Plugins
 {
-	[Info("RectZones", "deer_SWAG", "0.0.25", ResourceId = 2029)]
+	[Info("RectZones", "deer_SWAG", "0.1.0", ResourceId = 2029)]
 	[Description("Creates polygonal zones")]
 	public class RectZones : RustPlugin
 	{
@@ -19,20 +32,20 @@ namespace Oxide.Plugins
 
 		const int MaxPoints = 254;
 		const int MinPoints = 6;
-		const string PermissionName = "rectzones.use";
-		const string GameObjectPrefix = "zone-";
+		const string PluginPermission = "rectzones.use";
+		const string GameObjectPrefix = "rzone-";
 
 		#endregion
 
 		#region Data Classes
 
-		class StorageData
+		class PluginData
 		{
 			[JsonProperty("zones")]
 			public HashSet<ZoneDefinition> Zones = new HashSet<ZoneDefinition>();
 		}
 
-		public class ZoneDefinition
+		class ZoneDefinition
 		{
 			[JsonProperty("id")]
 			public string Id = string.Empty;
@@ -42,14 +55,11 @@ namespace Oxide.Plugins
 			public List<JVector3> Vertices = new List<JVector3>();
 			[JsonProperty("o")]
 			public Dictionary<string, string> Options = new Dictionary<string, string>();
-
-			public ZoneDefinition() { }
 		}
 
 		#endregion
 
-		StorageData data;
-
+		PluginData data;
 		HashSet<GameObject> currentZones = new HashSet<GameObject>();
 
 		class TemporaryStorage
@@ -69,19 +79,19 @@ namespace Oxide.Plugins
 			{ "entermsg", "Shows message when a player enters a zone" },
 			{ "exitmsg", "Shows message when a player exits a zone" },
 			{ "nobuild", "Players can't build in zone" },
-			{ "nobuildex", "Players can't build in zone. All buildings in a zone will be demolished" },
+			//{ "nobuildex", "Players can't build in zone. All buildings in a zone will be demolished" },
 			{ "nostability", "Removes stability from buildings" },
 			{ "nodestroy", "Players will be unable to destroy buildings and deployables" },
 			{ "nopvp", "Players won't get hurt by another player" }
 		};
 
-		void LoadDefaultMessages()
+		protected override void LoadDefaultMessages()
 		{
 			lang.RegisterMessages(new Dictionary<string, string>()
 			{
-				{ "HelpText", "Rect Zones:\n/rect add <height> [fixed] [name]\n/rect done\n/rect undo\n/rect remove <id/name>\n/rect list\n/rect options\n/rect show [zone id]\n/rect clear" },
-				{ "AlreadyEditing", "You are editing a zone. Type /rect done to finish editing" },
-				{ "AddHelp", "Now you can start adding points by pressing \"USE\" button (default is \"E\"). They will be added where your crosshair is pointing. To add options type /options <name> = [value]. To finish type /rect done" },
+				{ "HelpText", "Rect Zones:\n/rect add <height> [fixed] [name]\n/rect finish\n/rect undo\n/rect remove <id/name>\n/rect list\n/rect options\n/rect show [zone id]\n/rect clear" },
+				{ "AlreadyEditing", "You are editing a zone. Type /rect finish to finish editing" },
+				{ "AddHelp", "Now you can start adding points by pressing \"USE\" button (default is \"E\"). They will be added where your crosshair is pointing. To add options type /options <name> = [value]. To finish type /rect finish" },
 				{ "Done", "Zone <color=#ffff00ff>{name}</color> with id <color=#ffff00ff>{id}</color> was added" },
 				{ "DonePointsCount", "Points count should be more than 2 and less than 128" },
 				{ "RemoveHelp", "To remove a zone type /rect remove <id/name>" },
@@ -101,102 +111,19 @@ namespace Oxide.Plugins
 			}, this);
 		}
 
-		void Loaded()
+		Commander cmdr = new Commander();
+
+		void Init()
 		{
-			LoadDefaultMessages();
 			LoadData();
+			permission.RegisterPermission(PluginPermission, this);
 
-			permission.RegisterPermission(PermissionName, this);
-		}
-
-		void Unload()
-		{
-			foreach(GameObject zone in currentZones)
-				GameObject.Destroy(zone);
-
-			currentZones.Clear();
-		}
-
-		void OnServerInitialized()
-		{
-			foreach (ZoneDefinition definition in data.Zones)
-				CreateZoneByDefinition(definition);
-
-			Puts("{0} zones was created", data.Zones.Count);
-		}
-
-		void OnServerSave()
-		{
-			SaveData();
-		}
-
-		#region Point Addition
-
-		void OnPlayerDisconnected(BasePlayer player, string reason)
-		{
-			foreach(GameObject zone in currentZones)
-			{
-				RectZone zoneComponent = zone.GetComponent<RectZone>();
-				zoneComponent.Players.Remove(player);
-			}
-
-			if (!isEditing)
-				return;
-
-			tempPlayers.RemoveAll(x => x.Player.userID == player.userID);
-		}
-
-		void OnPlayerInput(BasePlayer player, InputState input)
-		{
-			if (!isEditing)
-				return;
-
-			if (!input.WasJustPressed(BUTTON.USE))
-				return;
-
-			for (int i = 0; i < tempPlayers.Count; i++)
-			{
-				TemporaryStorage storage = tempPlayers[i];
-
-				if (storage.Player.userID == player.userID)
-				{
-					Ray ray = player.eyes.HeadRay();
-					RaycastHit hit;
-
-					if(Physics.Raycast(ray, out hit, 10))
-					{
-						JVector3 bottomPoint = new JVector3(hit.point);
-						JVector3 topPoint = storage.Fixed ? new JVector3(hit.point.x, storage.Height, hit.point.z) : new JVector3(hit.point.x, hit.point.y + storage.Height, hit.point.z);
-
-						storage.Zone.Vertices.Add(bottomPoint);
-						storage.Zone.Vertices.Add(topPoint);
-
-						ShowPoint(player, bottomPoint.ToUnity(), topPoint.ToUnity(), 2f);
-					}
-				}
-			}
-		}
-
-		#endregion Point Addition
-
-		#region Commands
-
-		CommandHelper chatHelper = new CommandHelper();
-
-		[ChatCommand("rect")]
-		void cmdChat(BasePlayer player, string command, string[] args)
-		{
-			if (!IsPlayerPermitted(player, PermissionName))
-				return;
-
-			int length = args.Length;
-
-			chatHelper.Run(args, () =>
+			cmdr.Add(null, null, (player, args) =>
 			{
 				player.ChatMessage(Lang("HelpText", player));
 			});
 
-			chatHelper.OnCommand("add", () =>
+			cmdr.Add("add", null, (player, args) =>
 			{
 				if (CheckIsEditing(player) != null)
 				{
@@ -204,47 +131,41 @@ namespace Oxide.Plugins
 					return;
 				}
 
-				if (chatHelper.NextExists())
+				if (args["height"].Value == null)
 				{
-					float height = 0.0f;
+					player.ChatMessage(Lang("InvalidAddCommand", player));
+					return;
+				}
 
-					if(float.TryParse(chatHelper.Next(), out height))
-					{
-						if(chatHelper.NextExists())
-						{
-							if(chatHelper.Next().Equals("fixed", StringComparison.CurrentCultureIgnoreCase))
-							{
-								if(chatHelper.NextExists()) // with height, "fixed" and name
-								{
-									CommandAdd(player, height, chatHelper.Next(), true);
-								}
-								else // with height and "fixed"
-								{
-									CommandAdd(player, height, null, true);
-								}
-							}
-							else // with height and name
-							{
-								CommandAdd(player, height, chatHelper.Current());
-							}
-						}
-						else // with only height
-						{
-							CommandAdd(player, height);
-						}
-					}
+				if (args["height"].IsInvalid)
+				{
+					player.ChatMessage(Lang("HeightMustBeNumber", player));
+					return;
+				}
+
+				if (args.Count == 1)
+				{
+					CommandAdd(player, args["height"].Get<float>());
+					return;
+				}
+
+				if (args["fixed"].String == "fixed")
+				{
+					if (args["name"].Value == null)
+						CommandAdd(player, args["height"].Single, null, true);
 					else
-					{
-						player.ChatMessage(Lang("HeightMustBeNumber", player));
-					}
+						CommandAdd(player, args["height"].Single, args["name"].String, true);
 				}
 				else
 				{
-					player.ChatMessage(Lang("InvalidAddCommand", player));
+					CommandAdd(player, args["height"].Single, args["fixed"].String);
 				}
-			});
 
-			chatHelper.OnCommand("done", () =>
+			}).AddParam("height", Commander.ParamType.Float)
+			  .AddParam("fixed")
+			  .AddParam("name");
+
+			cmdr.Add("finish", null, (player, args) =>
 			{
 				TemporaryStorage storage = CheckIsEditing(player);
 
@@ -256,18 +177,18 @@ namespace Oxide.Plugins
 						return;
 					}
 
-					CommandDone(player);
+					CommandFinish(player);
 					player.ChatMessage(Lang("Done", player).Replace("{id}", storage.Zone.Id).Replace("{name}", storage.Zone.Name));
 				}
 			});
 
-			chatHelper.OnCommand("undo", () =>
+			cmdr.Add("undo", null, (player, args) =>
 			{
 				TemporaryStorage storage = CheckIsEditing(player);
 
 				if (storage != null)
 				{
-					if(storage.Zone.Vertices.Count != 0)
+					if (storage.Zone.Vertices.Count != 0)
 					{
 						storage.Zone.Vertices.RemoveRange(storage.Zone.Vertices.Count - 2, 2);
 						player.ChatMessage(Lang("UndoComplete", player));
@@ -275,7 +196,78 @@ namespace Oxide.Plugins
 				}
 			});
 
-			chatHelper.OnCommand("remove", () =>
+			cmdr.Add("list", null, (player, args) =>
+			{
+				if (data.Zones.Count == 0)
+				{
+					player.ChatMessage(Lang("Empty", player));
+					return;
+				}
+
+				var result = new StringBuilder(Lang("List", player).Length);
+				result.Append(Lang("List", player));
+
+				foreach (ZoneDefinition zd in data.Zones)
+					result.Append(zd.Id + (zd.Name != null ? (" (" + zd.Name + ")") : "") + ", ");
+				
+				player.ChatMessage(result.Remove(result.Length - 2, 2).ToString());
+			});
+
+			cmdr.Add("current", null, (player, args) =>
+			{
+				RectZone zone = GetCurrentZoneForPlayer(player);
+
+				if (zone != null)
+					player.ChatMessage(Lang("CurrentZone", player).Replace("{id}", zone.Definition.Id));
+				else
+					player.ChatMessage(Lang("CurrentZoneNoZone", player));
+			});
+
+			cmdr.Add("clear", null, (player, args) =>
+			{
+				foreach (GameObject zone in currentZones)
+					GameObject.Destroy(zone);
+
+				currentZones.Clear();
+				data.Zones.Clear();
+
+				player.ChatMessage(Lang("Cleared", player));
+			});
+
+			cmdr.Add("show", null, (player, args) => // TODO show by name
+			{
+				if (args["id"].Value != null)
+				{
+					if (args["id"].String.Equals("current", StringComparison.CurrentCultureIgnoreCase))
+					{
+						RectZone zone = GetCurrentZoneForPlayer(player);
+						zone.ShowZone(player, 10f);
+					}
+					else
+					{
+						var zone = currentZones.First((z) => z.GetComponent<RectZone>().Definition.Id.Equals(args["id"].String));
+
+						if (zone != null)
+							zone.GetComponent<RectZone>().ShowZone(player, 10f);
+						else
+							player.ChatMessage(Lang("ZoneNotFound", player));						
+					}
+				}
+				else
+				{
+					if (currentZones.Count == 0)
+					{
+						player.ChatMessage(Lang("ShowEmpty", player));
+						return;
+					}
+
+					foreach (GameObject zone in currentZones)
+						zone.GetComponent<RectZone>().ShowZone(player, 10f);
+				}
+
+			}).AddParam("id");
+
+			cmdr.Add("remove", null, (player, args) =>
 			{
 				if (CheckIsEditing(player) != null)
 				{
@@ -283,11 +275,11 @@ namespace Oxide.Plugins
 					return;
 				}
 
-				if (chatHelper.NextExists())
+				if (args["nameOrId"].Value != null)
 				{
-					if (IsDigitsOnly(chatHelper.Next()))
+					if (IsDigitsOnly(args["nameOrId"].String))
 					{
-						int removed = data.Zones.RemoveWhere(x => x.Id == chatHelper.Current());
+						int removed = data.Zones.RemoveWhere(x => x.Id == args["nameOrId"].String);
 
 						if (removed <= 0)
 						{
@@ -299,7 +291,7 @@ namespace Oxide.Plugins
 						{
 							RectZone rz = go.GetComponent<RectZone>();
 
-							if (rz.Definition.Id == chatHelper.Current())
+							if (rz.Definition.Id == args["nameOrId"].String)
 							{
 								GameObject.Destroy(go);
 								return true;
@@ -307,8 +299,6 @@ namespace Oxide.Plugins
 
 							return false;
 						});
-
-						SaveData();
 
 						player.ChatMessage(Lang("Removed", player));
 					}
@@ -319,7 +309,7 @@ namespace Oxide.Plugins
 							if (x.Name == null)
 								return false;
 
-							return x.Name.Equals(chatHelper.Current(), StringComparison.CurrentCultureIgnoreCase);
+							return x.Name.Equals(args["nameOrId"].String, StringComparison.CurrentCultureIgnoreCase);
 						});
 
 						if (removed <= 0)
@@ -332,7 +322,7 @@ namespace Oxide.Plugins
 						{
 							RectZone rz = go.GetComponent<RectZone>();
 
-							if (rz.Definition.Name.Equals(chatHelper.Current(), StringComparison.CurrentCultureIgnoreCase))
+							if (rz.Definition.Name.Equals(args["nameOrId"].String, StringComparison.CurrentCultureIgnoreCase))
 							{
 								GameObject.Destroy(go);
 								return true;
@@ -341,8 +331,6 @@ namespace Oxide.Plugins
 							return false;
 						});
 
-						SaveData();
-
 						player.ChatMessage(Lang("Removed", player));
 					}
 				}
@@ -350,56 +338,24 @@ namespace Oxide.Plugins
 				{
 					player.ChatMessage(Lang("RemoveHelp", player));
 				}
-			});
 
-			chatHelper.OnCommand("list", () =>
-			{
-				if (data.Zones.Count == 0)
-				{
-					player.ChatMessage(Lang("Empty", player));
-					return;
-				}
+			}).AddParam("nameOrId");
 
-				string result = Lang("List", player);
-				foreach (ZoneDefinition zd in data.Zones)
-				{
-					result += zd.Id + (zd.Name != null ? (" (" + zd.Name + ")") : "") + ", ";
-				}
-
-				player.ChatMessage(result.Substring(0, result.Length - 2));
-			});
-
-			chatHelper.OnCommand("edit", () =>
-			{
-				if (CheckIsEditing(player) != null)
-				{
-					player.ChatMessage(Lang("AlreadyEditing", player));
-					return;
-				}
-
-				if (args.Length > 1 && IsDigitsOnly(args[1]))
-				{
-					// TODO: editing
-				}
-			});
-
-			chatHelper.OnCommand("options", () =>
+			cmdr.Add("options", null, (player, args) =>
 			{
 				TemporaryStorage storage = CheckIsEditing(player);
 
 				if (storage == null)
 				{
-					if (chatHelper.NextExists())
+					if (args["command"].Value != null)
 					{
-						string id = chatHelper.Next();
-
-						if (IsDigitsOnly(id))
+						if (IsDigitsOnly(args["command"].String))
 						{
 							ZoneDefinition definition = null;
 
 							foreach (ZoneDefinition d in data.Zones)
 							{
-								if (d.Id == id)
+								if (d.Id == args["command"].String)
 								{
 									definition = d;
 									break;
@@ -445,15 +401,15 @@ namespace Oxide.Plugins
 				}
 				else
 				{
-					if (chatHelper.NextExists())
+					if (args["command"].Value != null)
 					{
-						if (chatHelper.Next() == "list")
+						if (args["command"].String == "list")
 						{
 							string result = string.Empty;
 
 							foreach (KeyValuePair<string, string> option in availableOptions)
 							{
-								result += "<color=#ffa500ff>" + option.Key + "</color> - " + (option.Value ?? "No description") + "\n";
+								result += "<color=#ffa500ff>" + option.Key + "</color> - " + (option.Value ?? "") + "\n";
 							}
 
 							player.ChatMessage(result);
@@ -461,9 +417,11 @@ namespace Oxide.Plugins
 							return;
 						}
 
-						for (int i = 1; i < args.Length; i++)
+						string[] opts = args["command"].String.Split(' ');
+
+						for (int i = 1; i < opts.Length; i++)
 						{
-							string[] option = args[i].Split(new char[] { '=' }, 2);
+							string[] option = opts[i].Split(new char[] { '=' }, 2);
 
 							storage.Zone.Options.Add(option[0], (option.Length > 1 ? option[1] : null));
 						}
@@ -486,74 +444,87 @@ namespace Oxide.Plugins
 						}
 					}
 				}
-			});
-
-			chatHelper.OnCommand("show", () =>
-			{
-				if (chatHelper.NextExists() && IsDigitsOnly(chatHelper.Next()))
-				{
-					foreach (GameObject zone in currentZones)
-					{
-						RectZone component = zone.GetComponent<RectZone>();
-
-						if (component.Definition.Id == chatHelper.Current())
-						{
-							component.ShowZone(player, 10f);
-							return;
-						}
-					}
-
-					player.ChatMessage(Lang("ZoneNotFound", player));
-				}
-				else if (chatHelper.Current().Equals("current", StringComparison.CurrentCultureIgnoreCase))
-				{
-					RectZone zone = GetCurrentZoneForPlayer(player);
-					zone.ShowZone(player, 10f);
-				}
-				else
-				{
-					if (currentZones.Count == 0)
-					{
-						player.ChatMessage(Lang("ShowEmpty", player));
-						return;
-					}
-
-					foreach (GameObject zone in currentZones)
-					{
-						zone.GetComponent<RectZone>().ShowZone(player, 10f);
-					}
-				}
-			});
-
-			chatHelper.OnCommand("current", () =>
-			{
-				RectZone zone = GetCurrentZoneForPlayer(player);
-
-				if (zone != null)
-				{
-					player.ChatMessage(Lang("CurrentZone", player).Replace("{id}", zone.Definition.Id));
-				}
-				else
-				{
-					player.ChatMessage(Lang("CurrentZoneNoZone", player));
-				}
-			});
-
-			chatHelper.OnCommand("clear", () =>
-			{
-				foreach (GameObject zone in currentZones)
-				{
-					GameObject.Destroy(zone);
-				}
-
-				currentZones.Clear();
-				data.Zones.Clear();
-
-				SaveData();
-
-				player.ChatMessage(Lang("Cleared", player));
-			});
+			}).AddParam("command", Commander.ParamType.String, true);
 		}
+
+		void Unload()
+		{
+			foreach(GameObject zone in currentZones)
+				GameObject.Destroy(zone);
+
+			currentZones.Clear();
+		}
+
+		void OnServerInitialized()
+		{
+			foreach (ZoneDefinition definition in data.Zones)
+				CreateZoneByDefinition(definition);
+
+			Puts("{0} zones were created", data.Zones.Count);
+		}
+
+		void OnServerSave()
+		{
+			SaveData();
+		}
+
+		[ChatCommand("rect")]
+		void cmdChat(BasePlayer player, string command, string[] args)
+		{
+			//if (!PlayerHasPermission(player, PluginPermission))
+			//return;
+
+			cmdr.Run(player, args);
+		}
+
+		#region Point Addition
+
+		void OnPlayerDisconnected(BasePlayer player, string reason)
+		{
+			foreach(GameObject zone in currentZones)
+			{
+				RectZone zoneComponent = zone.GetComponent<RectZone>();
+				zoneComponent.Players.Remove(player);
+			}
+
+			if (isEditing)
+				tempPlayers.RemoveAll(x => x.Player.userID == player.userID);
+		}
+
+		void OnPlayerInput(BasePlayer player, InputState input)
+		{
+			if (!isEditing)
+				return;
+
+			if (!input.WasJustPressed(BUTTON.USE))
+				return;
+	
+			for (int i = 0; i < tempPlayers.Count; i++)
+			{
+				TemporaryStorage storage = tempPlayers[i];
+
+				if (storage.Player.userID == player.userID)
+				{
+					Ray ray = player.eyes.HeadRay();
+					RaycastHit hit;
+
+					if(Physics.Raycast(ray, out hit, 10))
+					{
+						JVector3 bottomPoint = new JVector3(hit.point);
+						JVector3 topPoint = storage.Fixed ? new JVector3(hit.point.x, storage.Height, hit.point.z) : new JVector3(hit.point.x, hit.point.y + storage.Height, hit.point.z);
+
+						storage.Zone.Vertices.Add(bottomPoint);
+						storage.Zone.Vertices.Add(topPoint);
+
+						ShowPoint(player, bottomPoint.ToUnity(), topPoint.ToUnity(), 2f);
+					}
+				}
+			}
+		}
+
+		#endregion Point Addition
+
+		#region Commands
 
 		TemporaryStorage CheckIsEditing(BasePlayer player)
 		{
@@ -600,7 +571,7 @@ namespace Oxide.Plugins
 			tempPlayers.Add(storage);
 		}
 
-		void CommandDone(BasePlayer player)
+		void CommandFinish(BasePlayer player)
 		{
 			tempPlayers.RemoveAll((TemporaryStorage storage) =>
 			{
@@ -655,7 +626,7 @@ namespace Oxide.Plugins
 
 		void SendHelpText(BasePlayer player)
 		{
-			if(IsPlayerPermitted(player, PermissionName))
+			if(PlayerHasPermission(player, PluginPermission))
 				player.ChatMessage(Lang("HelpText", player));
 		}
 
@@ -791,16 +762,13 @@ namespace Oxide.Plugins
 
 		void LoadData()
 		{
-			data = Interface.GetMod().DataFileSystem.ReadObject<StorageData>(Title);
-
-			if (data == null)
-			{
-				RaiseError("Unable to load data file");
-				Interface.Oxide.UnloadPlugin(Title);
-			}
+			data = Interface.GetMod().DataFileSystem.ReadObject<PluginData>(Title);
 		}
 
-		void SaveData() => Interface.GetMod().DataFileSystem.WriteObject(Title, data);
+		void SaveData()
+		{
+			Interface.GetMod().DataFileSystem.WriteObject(Title, data);
+		}
 
 		static void DrawDebugLine(BasePlayer player, Vector3 from, Vector3 to, float duration = 1f)
 		{
@@ -819,77 +787,315 @@ namespace Oxide.Plugins
 			return number.ToString();
 		}
 
-		string Lang(string key, BasePlayer player = null) => lang.GetMessage(key, this, player?.UserIDString);
+		string Lang(string key, BasePlayer player = null)
+		{
+			return lang.GetMessage(key, this, player?.UserIDString);
+		}
 
 		bool IsDigitsOnly(string str)
 		{
 			foreach (char c in str)
-				if (c < '0' || c > '9')
+				if (!char.IsDigit(c))
 					return false;
 			return true;
 		}
 
-		bool IsPlayerPermitted(BasePlayer player, string permissionName) => (player.IsAdmin || permission.UserHasPermission(player.UserIDString, permissionName));
+		bool PlayerHasPermission(BasePlayer player, string permissionName)
+		{
+			return player.IsAdmin || permission.UserHasPermission(player.UserIDString, permissionName);
+		}
 
 		#endregion Utils
 
 		#region Helpers
 
-		class CommandHelper
+		/// <summary>
+		/// Helper class for chat and console commands
+		/// </summary>
+		public class Commander
 		{
-			private string[] args;
-			private int index;
-			private bool isEmpty;
+			#region Definitions
 
-			public void Run(string[] commands, Action onEmpty)
+			/// <summary>Type of parameter for auto convertion</summary>
+			public enum ParamType
 			{
-				if (commands.Length == 0 || string.IsNullOrEmpty(commands[0]))
+				/// <summary>Use this if you want a raw string</summary>
+				String,
+				Int, Float, Bool,
+				/// <summary>Returns a BasePlayer object</summary>
+				Player
+			}
+
+			public struct Param
+			{
+				public string Name { get; internal set; }
+				public ParamType Type { get; internal set; }
+				public bool Greedy { get; internal set; }
+			}
+
+			public class ParamValue
+			{
+				/// <summary>Raw value</summary>
+				public object Value { get; internal set; }
+				/// <summary>If argument wasn't parse properly</summary>
+				public bool IsInvalid { get; internal set; }
+
+				public string String => Get<string>();
+				public int Integer   => Get<int>();
+				public float Single  => Get<float>();
+				public BasePlayer Player => Get<BasePlayer>();
+				
+				/// <exception cref="InvalidCastException"></exception>
+				public T Get<T>()
 				{
-					onEmpty.Invoke();
-					isEmpty = true;
+					return (T)Value;
+				}
+			}
+
+			public class ValueCollection : Dictionary<string, ParamValue>
+			{
+				public new ParamValue this[string key]
+				{
+					get
+					{
+						ParamValue value;
+						this.TryGetValue(key, out value);
+						return value;
+					}
+				}
+			}
+
+			public class BaseCommand
+			{
+				public string Name { get; internal set; }
+				public string Permission { get; internal set; }
+
+				public virtual void Run(BasePlayer player, string[] args) { }
+			}
+
+			public class Command : BaseCommand
+			{
+				public List<Param> Params { get; internal set; } = new List<Param>();
+				public Action<BasePlayer, ValueCollection> Callback { get; internal set; }
+
+				public Command AddParam(string name, ParamType type = ParamType.String, bool greedy = false)
+				{
+					if (name == null)
+						throw new NullReferenceException("Name of the parameter can't be null");
+					if (greedy && type != ParamType.String)
+						throw new InvalidOperationException("Only string-type parameters can be greedy");
+
+					Params.Add(new Param
+					{
+						Name = name,
+						Type = type,
+						Greedy = greedy
+					});
+
+					return this;
+				}
+
+				public override void Run(BasePlayer player, string[] args)
+				{
+					var collection = new ValueCollection();
+
+					if (Params.Count > 0)
+						CheckParams(args, ref collection);
+
+					Callback?.Invoke(player, collection);
+				}
+
+				private void CheckParams(string[] args, ref ValueCollection collection)
+				{
+					for (int i = 0; i < args.Length; i++)
+					{
+						if (i >= Params.Count)
+							break;
+
+						var arg = args[i];
+						var param = Params[i];
+
+						if (param.Greedy)
+						{
+							collection.Add(param.Name, new ParamValue { Value = string.Join(" ", args, i, args.Length - i) });
+							break;
+						}
+
+						object value;
+						bool result = CheckAndConvert(arg, param.Type, out value);
+
+						collection.Add(param.Name, new ParamValue { Value = value, IsInvalid = !result });
+					}
+				}
+
+				private bool CheckAndConvert(string arg, ParamType type, out object result)
+				{
+					switch (type)
+					{
+						case ParamType.String:
+							result = arg;
+							return true;
+						case ParamType.Int:
+							{
+								int ret;
+								if (int.TryParse(arg, out ret))
+								{
+									result = ret;
+									return true;
+								}
+								result = ret;
+								return false;
+							}
+						case ParamType.Float:
+							{
+								float ret;
+								if (float.TryParse(arg, out ret))
+								{
+									result = ret;
+									return true;
+								}
+								result = ret;
+								return false;
+							}
+						case ParamType.Bool:
+							{
+								bool ret;
+								if (ParseBool(arg, out ret))
+								{
+									result = ret;
+									return true;
+								}
+								result = ret;
+								return false;
+							}
+						case ParamType.Player:
+							{
+								result = BasePlayer.Find(arg);
+								return true;
+							}
+					}
+
+					result = null;
+					return false;
+				}
+			}
+
+			public class CommandGroup : BaseCommand
+			{
+				private List<BaseCommand> _children = new List<BaseCommand>();
+				private Command _empty;
+
+				public Command Add(string name, string permission, Action<BasePlayer, ValueCollection> callback)
+				{
+					var cmd = new Command
+					{
+						Name = name,
+						Permission = permission,
+						Callback = callback
+					};
+
+					if (name == null)
+						return _empty = cmd;
+
+					_children.Add(cmd);
+					return cmd;
+				}
+
+				public CommandGroup AddGroup(string name, string permission = null)
+				{
+					var group = new CommandGroup
+					{
+						Name = name,
+						Permission = permission
+					};
+
+					_children.Add(group);
+					return group;
+				}
+
+				public override void Run(BasePlayer player, string[] args)
+				{
+					Commander.Run(_children, _empty, player, args);
+				}
+			}
+
+			#endregion Definitions
+
+			private List<BaseCommand> _commands = new List<BaseCommand>();
+			private Command _empty;
+
+			public Command Add(string name, string permission, Action<BasePlayer, ValueCollection> callback)
+			{
+				var cmd = new Command
+				{
+					Name = name,
+					Permission = permission,
+					Callback = callback
+				};
+
+				if (name == null || name.Length == 0)
+					return _empty = cmd;
+
+				_commands.Add(cmd);
+				return cmd;
+			}
+
+			public CommandGroup AddGroup(string name, string permission = null)
+			{
+				var group = new CommandGroup
+				{
+					Name = name,
+					Permission = permission
+				};
+
+				_commands.Add(group);
+				return group;
+			}
+
+			static protected void Run(List<BaseCommand> cmds, BaseCommand empty, BasePlayer player, string[] args)
+			{
+				if (args == null || args.Length == 0)
+				{
+					empty?.Run(player, args);
 					return;
 				}
 
-				isEmpty = false;
-				args = commands;
-				index = 0;
+				cmds.Find((cmd) => cmd.Name.Equals(args[0], StringComparison.CurrentCultureIgnoreCase))
+				   ?.Run(player, args.Skip(1).ToArray());
 			}
 
-			public void OnCommand(string command, Action action)
+			public void Run(BasePlayer player, string[] args)
 			{
-				if (isEmpty)
-					return;
-
-				if (command.Equals(args[0], StringComparison.CurrentCultureIgnoreCase))
-					action.Invoke();
+				Run(_commands, _empty, player, args);
 			}
 
-			public string Current()
+			#region Custom Boolean Parser
+
+			private static string[] _trueBoolValues = { "true", "yes", "on", "enable", "1" };
+			private static string[] _falseBoolValues = { "false", "no", "off", "disable", "0" };
+
+			protected static bool ParseBool(string input, out bool result)
 			{
-				return args[index];
+				for (int i = 0; i < _trueBoolValues.Length; i++)
+				{
+					if (input.Equals(_trueBoolValues[i], StringComparison.CurrentCultureIgnoreCase))
+					{
+						return result = true;
+					}
+					else if (input.Equals(_falseBoolValues[i], StringComparison.CurrentCultureIgnoreCase))
+					{
+						result = false;
+						return true;
+					}
+				}
+
+				return result = false;
 			}
 
-			public string Next()
-			{
-				index++;
-				return args[index];
-			}
-
-			public string Prev()
-			{
-				index--;
-				return args[index];
-			}
-
-			public bool NextExists(int num = 1)
-			{
-				if (args.Length >= (index + num + 1))
-					return true;
-				return false;
-			}
+			#endregion Custom Boolean Parser
 		}
 
-		public class JVector3
+		class JVector3
 		{
 			public float x;
 			public float y;
@@ -919,10 +1125,10 @@ namespace Oxide.Plugins
 
 		class RectZone : MonoBehaviour
 		{
-			public ZoneDefinition Definition;
-			public HashSet<BasePlayer> Players = new HashSet<BasePlayer>();
+			public ZoneDefinition Definition { get; private set; }
+			public HashSet<BasePlayer> Players { get; private set; } = new HashSet<BasePlayer>();
 
-			MeshCollider collider;
+			private MeshCollider collider;
 
 			void Awake()
 			{
@@ -941,7 +1147,6 @@ namespace Oxide.Plugins
 			public void SetZone(ZoneDefinition definition)
 			{
 				Definition = definition;
-
 				MakeMesh(definition.Vertices);
 			}
 
@@ -973,30 +1178,7 @@ namespace Oxide.Plugins
 				foreach(JVector3 vertex in vertices)
 					tempVertices.Add(vertex.ToUnity());
 
-				// Bottom cap
-
-				/*int count = 1;
-
-				for (int i = 0; i < tempVertices.Count - 4; i += 2)
-				{
-					if (count % 2 == 0)
-					{
-						tempIndices.Add(i + 2);
-						tempIndices.Add(i + 4);
-						tempIndices.Add(0);
-					}
-					else
-					{
-						tempIndices.Add(0);
-						tempIndices.Add(i + 2);
-						tempIndices.Add(i + 4);
-					}
-
-					count++;
-				}*/
-
 				// Side
-
 				tempIndices.Add(0);
 				tempIndices.Add(1);
 
@@ -1017,28 +1199,6 @@ namespace Oxide.Plugins
 				tempIndices.Add(tempVertices.Count - 1);
 				tempIndices.Add(1);
 				tempIndices.Add(0);
-
-				// Top cap
-
-				/*count = 1;
-
-				for (int i = 1; i < tempVertices.Count - 4; i += 2)
-				{
-					if (count % 2 == 0)
-					{
-						tempIndices.Add(tempVertices.Count - (i + 2));
-						tempIndices.Add(tempVertices.Count - (i + 4));
-						tempIndices.Add(tempVertices.Count - 1);
-					}
-					else
-					{
-						tempIndices.Add(tempVertices.Count - 1);
-						tempIndices.Add(tempVertices.Count - (i + 2));
-						tempIndices.Add(tempVertices.Count - (i + 4));
-					}
-
-					count++;
-				}*/
 
 				mesh.SetVertices(tempVertices);
 				mesh.SetIndices(tempIndices.ToArray(), MeshTopology.Triangles, 0);
