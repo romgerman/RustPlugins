@@ -4,10 +4,8 @@ using System.Linq;
 
 /*
 	TODO:
-			- Add permission checking
 			- (?) Make code smaller
 			- Make required/not required parameters
-			- Text dialogs?
 			- Command aliases?
 */
 
@@ -66,9 +64,11 @@ namespace Oxide.Plugins
 		/// <summary>
 		/// Helper class for chat and console commands
 		/// </summary>
-		public class Commander
+		class Commander
 		{
 			#region Definitions
+
+			public delegate bool PermissionCheck(BasePlayer player, string permission);
 
 			/// <summary>Type of parameter for auto convertion</summary>
 			public enum ParamType
@@ -82,17 +82,17 @@ namespace Oxide.Plugins
 
 			public struct Param
 			{
-				public string Name    { get; internal set; }
-				public ParamType Type { get; internal set; }
-				public bool Greedy    { get; internal set; }
+				public string Name    { get; set; }
+				public ParamType Type { get; set; }
+				public bool Greedy    { get; set; }
 			}
 
 			public class ParamValue
 			{
 				/// <summary>Raw value</summary>
-				public object Value { get; internal set; }
+				public object Value { get; set; }
 				/// <summary>If argument wasn't parse properly</summary>
-				public bool IsInvalid { get; internal set; }
+				public bool IsInvalid { get; set; }
 
 				public string String => Get<string>();
 				public int Integer => Get<int>();
@@ -121,16 +121,16 @@ namespace Oxide.Plugins
 
 			public class BaseCommand
 			{
-				public string Name { get; internal set; }
-				public string Permission { get; internal set; }
+				public string Name { get; set; }
+				public string Permission { get; set; }
 
-				public virtual void Run(BasePlayer player, string[] args) { }
+				public virtual void Run(BasePlayer player, string[] args, PermissionCheck check) { }
 			}
 
 			public class Command : BaseCommand
 			{
-				public List<Param> Params { get; internal set; } = new List<Param>();
-				public Action<BasePlayer, ValueCollection> Callback { get; internal set; }
+				public List<Param> Params => new List<Param>();
+				public Action<BasePlayer, ValueCollection> Callback { get; set; }
 
 				public Command AddParam(string name, ParamType type = ParamType.String, bool greedy = false)
 				{
@@ -149,8 +149,11 @@ namespace Oxide.Plugins
 					return this;
 				}
 
-				public override void Run(BasePlayer player, string[] args)
+				public override void Run(BasePlayer player, string[] args, PermissionCheck check)
 				{
+					if (check != null && !check(player, Permission))
+						return;
+
 					var collection = new ValueCollection();
 
 					if (Params.Count > 0)
@@ -177,7 +180,6 @@ namespace Oxide.Plugins
 
 						object value;
 						bool result = CheckAndConvert(arg, param.Type, out value);
-
 						collection.Add(param.Name, new ParamValue { Value = value, IsInvalid = !result });
 					}
 				}
@@ -223,14 +225,12 @@ namespace Oxide.Plugins
 								return false;
 							}
 						case ParamType.Player:
-							{
-								result = BasePlayer.Find(arg);
-								return true;
-							}
+							result = BasePlayer.Find(arg);
+							return true;
+						default:
+							result = null;
+							return false;
 					}
-
-					result = null;
-					return false;
 				}
 			}
 			
@@ -267,8 +267,11 @@ namespace Oxide.Plugins
 					return group;
 				}
 
-				public override void Run(BasePlayer player, string[] args)
+				public override void Run(BasePlayer player, string[] args, PermissionCheck check)
 				{
+					if (check != null && !check(player, Permission))
+						return;
+
 					Commander.Run(_children, _empty, player, args);
 				}
 			}
@@ -277,6 +280,12 @@ namespace Oxide.Plugins
 
 			private List<BaseCommand> _commands = new List<BaseCommand>();
 			private Command _empty;
+			private PermissionCheck _permCheck;
+
+			public Commander(PermissionCheck permissionCheck = null)
+			{
+				_permCheck = permissionCheck;
+			}
 
 			public Command Add(string name, string permission, Action<BasePlayer, ValueCollection> callback)
 			{
@@ -306,21 +315,21 @@ namespace Oxide.Plugins
 				return group;
 			}
 
-			static protected void Run(List<BaseCommand> cmds, BaseCommand empty, BasePlayer player, string[] args)
+			static protected void Run(List<BaseCommand> cmds, BaseCommand empty, BasePlayer player, string[] args, PermissionCheck check = null)
 			{
 				if (args == null || args.Length == 0)
 				{
-					empty?.Run(player, args);
+					empty?.Run(player, args, check);
 					return;
 				}
 
 				cmds.Find((cmd) => cmd.Name.Equals(args[0], StringComparison.CurrentCultureIgnoreCase))
-				   ?.Run(player, args.Skip(1).ToArray());
+				   ?.Run(player, args.Skip(1).ToArray(), check);
 			}
 
 			public void Run(BasePlayer player, string[] args)
 			{
-				Run(_commands, _empty, player, args);
+				Run(_commands, _empty, player, args, _permCheck);
 			}
 
 			#region Custom Boolean Parser
@@ -348,5 +357,7 @@ namespace Oxide.Plugins
 
 			#endregion Custom Boolean Parser
 		}
+
+
 	}
 }
